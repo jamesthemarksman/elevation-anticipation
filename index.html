@@ -454,7 +454,8 @@
                 setInterval(processTelemetryLoop, 1000);
             });
 
-            // Expose for console testing
+            // Expose functions for inline onclick and console testing
+            window.calculateRoute = calculateRoute;
             window.testPhysics = {
                 calculatePower: calculatePower,
                 calculateBalancePower: calculateBalancePower,
