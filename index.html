@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Cyclist Navigation &amp; Telemetry Dashboard</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        :root {
+            --bg-dark: #121214;
+            --bg-panel: #1a1a1e;
+            --accent-green: #4ade80;
+            --accent-blue: #3b82f6;
+            --text-main: #f4f4f5;
+            --text-muted: #a1a1aa;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        #app-container { position: relative; flex: 1; display: flex; flex-direction: column; }
+        #map { width: 100%; flex: 1; z-index: 1; }
+        #dashboard {
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            background-color: var(--bg-panel); z-index: 10;
+            border-top-left-radius: 16px; border-top-right-radius: 16px;
+            padding: 16px; box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+            display: flex; flex-direction: column; gap: 12px;
+            max-height: 55%; overflow-y: auto;
+        }
+        .input-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .input-group { display: flex; flex-direction: column; gap: 4px; }
+        label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 640; }
+        input {
+            background-color: var(--bg-dark); border: 1px solid #2d2d34;
+            border-radius: 6px; padding: 8px; color: var(--text-main); font-size: 14px;
+        }
+        button {
+            background-color: var(--accent-blue); color: white; border: none;
+            padding: 10px; border-radius: 6px; font-weight: bold;
+            cursor: pointer; font-size: 14px; transition: background 0.2s;
+        }
+        button:hover { background-color: #2563eb; }
+        .stats-grid {
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+            background: var(--bg-dark); padding: 10px; border-radius: 8px;
+        }
+        .stat-card { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 6px; text-align: center; }
+        .stat-val { font-size: 18px; font-weight: 800; color: var(--accent-green); }
+        .stat-lbl { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+        #climb-alert {
+            display: none;
+            background: rgba(239, 68, 68, 0.15); border: 1px solid var(--danger);
+            border-radius: 8px; padding: 10px; font-size: 12px;
+            flex-direction: column; gap: 4px;
+        }
+        #climb-alert.active { display: flex; }
+        #inset-container {
+            position: absolute; top: 16px; right: 16px;
+            width: 110px; height: 110px; border-radius: 8px;
+            border: 2px solid var(--bg-panel);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 5; overflow: hidden; pointer-events: none;
+        }
+        #inset-map { width: 100%; height: 100%; }
+        #routing-panel {
+            position: absolute; top: 16px; left: 16px;
+            width: calc(100% - 160px); z-index: 5;
+            background: var(--bg-panel); padding: 10px; border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            display: flex; flex-direction: column; gap: 6px;
+        }
+        #routing-panel input { padding: 6px; font-size: 12px; }
+        @media (max-width: 480px) {
+            #inset-container { width: 80px; height: 80px; top: 10px; right: 10px; }
+            #routing-panel { width: calc(100% - 110px); top: 10px; left: 10px; padding: 8px; }
+            #routing-panel input { font-size: 11px; padding: 5px; }
+            #dashboard { max-height: 50%; padding: 12px; }
+            .stat-val { font-size: 15px; }
+            .stats-grid { grid-template-columns: repeat(3, 1fr); gap: 5px; padding: 8px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="app-container">
+        <div id="map"></div>
+        <div id="inset-container"><div id="inset-map"></div></div>
+        <div id="routing-panel">
+            <input type="text" id="start-input" placeholder="Start (e.g. Lon,Lat)" value="-114.0708,51.0447" />
+            <input type="text" id="end-input" placeholder="Destination" value="-114.0950,51.0500" />
+            <button onclick="calculateRoute()">Plan Route</button>
+        </div>
+        <div id="dashboard">
+            <div class="input-row">
+                <div class="input-group">
+                    <label>Rider Weight (kg)</label>
+                    <input type="number" id="w-rider" value="75" />
+                </div>
+                <div class="input-group">
+                    <label>Bike Weight (kg)</label>
+                    <input type="number" id="w-bike" value="10" />
+                </div>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-card"><div class="stat-val" id="val-power">0 W</div><div class="stat-lbl">Power Output</div></div>
+                <div class="stat-card"><div class="stat-val" id="val-speed">0.0 km/h</div><div class="stat-lbl">Current Speed</div></div>
+                <div class="stat-card"><div class="stat-val" id="val-grade">0.0%</div><div class="stat-lbl">Gradient</div></div>
+                <div class="stat-card"><div class="stat-val" id="val-dist">0.0 km</div><div class="stat-lbl">Distance</div></div>
+                <div class="stat-card"><div class="stat-val" id="val-climb">0 m</div><div class="stat-lbl">Elev. Gain</div></div>
+                <div class="stat-card"><div class="stat-val" id="val-bearing">0°</div><div class="stat-lbl">Heading</div></div>
+            </div>
+            <div id="climb-alert">
+                <div style="font-weight:bold; color: var(--danger);">STEEP GRADIENT DETECTED</div>
+                <div id="climb-remaining">Climb Distance Remaining: -- m</div>
+                <div id="climb-min-speed">Min Stability Speed: 6.0 km/h</div>
+                <div id="climb-min-power">Min Stability Power: -- W</div>
+            </div>
+        </div>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        (function() {
+            'use strict';
+
+            // --- State ---
+            const userState = {
+                lat: 51.0447,
+                lng: -114.0708,
+                alt: 1045,
+                speed: 5.5,
+                totalDistance: 0,
+                totalElevationGain: 0,
+                lastLat: null,
+                lastLng: null,
+                lastAlt: null
+            };
+
+            let mainMap, insetMap;
+            let userMarker, routeLine, insetRouteLine;
+            let routeCoordinates = [];
+            let currentRouteIndex = 0;
+            let gpsAvailable = false;
+            let reroutingInProgress = false;
+
+            // --- Physics Constants ---
+            const G = 9.81;
+            const AIR_DENSITY = 1.2;
+            const DEFAULT_CDA = 0.38;
+            const DEFAULT_CRR = 0.005;
+            const DEFAULT_ETA = 0.95;
+            const EARTH_RADIUS = 6371000;
+            const BALANCE_SPEED_MS = 1.667;
+            const REROUTE_THRESHOLD_M = 100;
+
+            // --- Physics Engine ---
+            function calculatePower(mass, gradeDecimal, velocityMps, cdA, crr, eta) {
+                const sinGrade = Math.sin(Math.atan(gradeDecimal));
+                const cosGrade = Math.cos(Math.atan(gradeDecimal));
+                const pGravity = mass * G * sinGrade * velocityMps;
+                const pDrag = 0.5 * cdA * AIR_DENSITY * Math.pow(velocityMps, 3);
+                const pRolling = mass * G * cosGrade * crr * velocityMps;
+                return (pGravity + pDrag + pRolling) / eta;
+            }
+
+            function calculateBalancePower(mass, gradeDecimal) {
+                return calculatePower(mass, gradeDecimal, BALANCE_SPEED_MS, DEFAULT_CDA, DEFAULT_CRR, DEFAULT_ETA);
+            }
+
+            function calculateGrade(p1, p2) {
+                const dist = haversineDistance(p1.lat, p1.lng, p2.lat, p2.lng);
+                if (dist < 0.1) return 0;
+                const run = p2.alt - p1.alt;
+                return (run / dist) * 100;
+            }
+
+            function haversineDistance(lat1, lon1, lat2, lon2) {
+                const dLat = (lat2 - lat1) * Math.PI / 180;
+                const dLon = (lon2 - lon1) * Math.PI / 180;
+                const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                return EARTH_RADIUS * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            }
+
+            function msToKmh(mps) { return mps * 3.6; }
+            function kmhToMs(kmh) { return kmh / 3.6; }
+
+            function calculateBearing(lat1, lon1, lat2, lon2) {
+                const dLon = (lon2 - lon1) * Math.PI / 180;
+                const y = Math.sin(dLon) * Math.cos(lat2 * Math.PI / 180);
+                const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) -
+                    Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLon);
+                return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+            }
+
+            // --- Map Initialization ---
+            function initMaps() {
+                mainMap = L.map('map', { zoomControl: false }).setView([userState.lat, userState.lng], 15);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    maxZoom: 19,
+                    attribution: '&copy; OpenStreetMap contributors'
+                }).addTo(mainMap);
+
+                userMarker = L.circleMarker([userState.lat, userState.lng], {
+                    radius: 8, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 1
+                }).addTo(mainMap);
+
+                insetMap = L.map('inset-map', {
+                    attributionControl: false, zoomControl: false,
+                    dragging: false, scrollWheelZoom: false
+                });
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(insetMap);
+                insetMap.setView([userState.lat, userState.lng], 12);
+            }
+
+            // --- GPS Geolocation ---
+            function initGeolocator() {
+                if ('geolocation' in navigator) {
+                    navigator.geolocation.watchPosition(
+                        function(position) {
+                            gpsAvailable = true;
+                            userState.lastLat = userState.lat;
+                            userState.lastLng = userState.lng;
+                            userState.lat = position.coords.latitude;
+                            userState.lng = position.coords.longitude;
+                            if (position.coords.altitude !== null) userState.alt = position.coords.altitude;
+                            if (position.coords.speed !== null) userState.speed = position.coords.speed;
+                        },
+                        function(err) {
+                            console.warn('GPS unavailable, using simulated values:', err.message);
+                        },
+                        { enableHighAccuracy: true, maximumAge: 1000 }
+                    );
+                } else {
+                    console.warn('Geolocation not supported, using simulated values.');
+                }
+            }
+
+            // --- OSRM Route Fetching ---
+            async function calculateRoute() {
+                const startRaw = document.getElementById('start-input').value.split(',');
+                const endRaw = document.getElementById('end-input').value.split(',');
+                if (startRaw.length < 2 || endRaw.length < 2) {
+                    alert('Please enter coordinates as Lon,Lat (e.g. -114.0708,51.0447)');
+                    return;
+                }
+                const url = 'https://router.project-osrm.org/route/v1/driving/' +
+                    startRaw[0].trim() + ',' + startRaw[1].trim() + ';' +
+                    endRaw[0].trim() + ',' + endRaw[1].trim() +
+                    '?geometries=geojson&overview=full&alternatives=false&steps=true';
+                try {
+                    const response = await fetch(url);
+                    const data = await response.json();
+                    if (!data.routes || data.routes.length === 0) {
+                        alert('No route found between these points.');
+                        return;
+                    }
+                    const coords = data.routes[0].geometry.coordinates;
+                    routeCoordinates = coords.map(function(c, idx) {
+                        return {
+                            lat: c[1],
+                            lng: c[0],
+                            alt: 1045 + (Math.sin(idx / 5) * 18) + (idx * 0.4)
+                        };
+                    });
+                    currentRouteIndex = 0;
+                    plotRouteGradients();
+                    // Reset telemetry when a new route is planned
+                    userState.totalDistance = 0;
+                    userState.totalElevationGain = 0;
+                    userState.lastLat = userState.lat;
+                    userState.lastLng = userState.lng;
+                    userState.lastAlt = userState.alt;
+                } catch (e) {
+                    console.error('Routing request failed:', e);
+                    alert('Routing request failed. Check console for details.');
+                }
+            }
+
+            // --- Gradient-Colored Route Rendering ---
+            function plotRouteGradients() {
+                if (routeLine) mainMap.removeLayer(routeLine);
+                if (insetRouteLine) insetMap.removeLayer(insetRouteLine);
+
+                const rawLatLngs = routeCoordinates.map(function(c) { return [c.lat, c.lng]; });
+                insetRouteLine = L.polyline(rawLatLngs, { color: '#3b82f6', weight: 2 }).addTo(insetMap);
+                insetMap.fitBounds(insetRouteLine.getBounds().pad(0.1));
+
+                const segments = [];
+                for (let i = 0; i < routeCoordinates.length - 1; i++) {
+                    const p1 = routeCoordinates[i];
+                    const p2 = routeCoordinates[i + 1];
+                    const dist = mainMap.distance([p1.lat, p1.lng], [p2.lat, p2.lng]);
+                    const run = p2.alt - p1.alt;
+                    const grade = dist > 0 ? (run / dist) * 100 : 0;
+
+                    let color = '#4ade80';
+                    if (grade >= 8) color = '#ef4444';
+                    else if (grade >= 5) color = '#f97316';
+                    else if (grade >= 2) color = '#eab308';
+
+                    segments.push(L.polyline([[p1.lat, p1.lng], [p2.lat, p2.lng]], {
+                        color: color, weight: 4, opacity: 0.9
+                    }));
+                }
+                routeLine = L.featureGroup(segments).addTo(mainMap);
+            }
+
+            // --- Distance to nearest route segment ---
+            function distanceToRoute(lat, lng) {
+                if (routeCoordinates.length < 2) return Infinity;
+                let minDist = Infinity;
+                const point = L.latLng(lat, lng);
+                for (let i = 0; i < routeCoordinates.length - 1; i++) {
+                    const p1 = L.latLng(routeCoordinates[i].lat, routeCoordinates[i].lng);
+                    const p2 = L.latLng(routeCoordinates[i + 1].lat, routeCoordinates[i + 1].lng);
+                    const d = point.distanceTo(p1) + point.distanceTo(p2);
+                    if (d < minDist) minDist = d;
+                }
+                return minDist;
+            }
+
+            // --- Telemetry Loop ---
+            function processTelemetryLoop() {
+                // Simulate movement along route if GPS not providing data
+                if (!gpsAvailable && routeCoordinates.length > 0 && currentRouteIndex < routeCoordinates.length - 1) {
+                    userState.lastLat = userState.lat;
+                    userState.lastLng = userState.lng;
+                    userState.lastAlt = userState.alt;
+
+                    currentRouteIndex++;
+                    if (currentRouteIndex >= routeCoordinates.length) {
+                        currentRouteIndex = routeCoordinates.length - 1;
+                    }
+                    const current = routeCoordinates[currentRouteIndex];
+                    userState.lat = current.lat;
+                    userState.lng = current.lng;
+                    userState.alt = current.alt;
+
+                    if (currentRouteIndex > 0) {
+                        const prev = routeCoordinates[currentRouteIndex - 1];
+                        const dist = haversineDistance(prev.lat, prev.lng, current.lat, current.lng);
+                        userState.speed = dist;
+                    }
+                } else if (!gpsAvailable) {
+                    // Random drift when no route is loaded
+                    userState.lastLat = userState.lat;
+                    userState.lastLng = userState.lng;
+                    userState.lastAlt = userState.alt;
+                    userState.lat += (Math.random() - 0.5) * 0.0005;
+                    userState.lng += (Math.random() - 0.5) * 0.0005;
+                    userState.alt += (Math.random() - 0.5) * 0.5;
+                }
+
+                // Calculate telemetry
+                const mass = parseFloat(document.getElementById('w-rider').value) +
+                             parseFloat(document.getElementById('w-bike').value) || 85;
+
+                let distanceDelta = 0;
+                if (userState.lastLat !== null && userState.lastLng !== null) {
+                    distanceDelta = haversineDistance(userState.lastLat, userState.lastLng, userState.lat, userState.lng);
+                    if (distanceDelta < 500) { // Sanity filter
+                        userState.totalDistance += distanceDelta;
+                    }
+                }
+
+                if (userState.lastAlt !== null && userState.alt > userState.lastAlt) {
+                    const altDelta = userState.alt - userState.lastAlt;
+                    if (altDelta < 100) {
+                        userState.totalElevationGain += altDelta;
+                    }
+                }
+
+                const grade = calculateGrade(
+                    { lat: userState.lastLat || userState.lat, lng: userState.lastLng || userState.lng, alt: userState.lastAlt || userState.alt },
+                    { lat: userState.lat, lng: userState.lng, alt: userState.alt }
+                );
+
+                const speedMs = userState.speed;
+                const gradeDecimal = grade / 100;
+                const power = calculatePower(mass, gradeDecimal, speedMs, DEFAULT_CDA, DEFAULT_CRR, DEFAULT_ETA);
+                const balancePower = calculateBalancePower(mass, gradeDecimal);
+
+                const bearing = calculateBearing(
+                    userState.lastLat || userState.lat, userState.lastLng || userState.lng,
+                    userState.lat, userState.lng
+                );
+
+                // Update DOM
+                document.getElementById('val-power').textContent = Math.round(power) + ' W';
+                document.getElementById('val-speed').textContent = msToKmh(speedMs).toFixed(1) + ' km/h';
+                document.getElementById('val-grade').textContent = grade.toFixed(1) + '%';
+                document.getElementById('val-dist').textContent = (userState.totalDistance / 1000).toFixed(2) + ' km';
+                document.getElementById('val-climb').textContent = Math.round(userState.totalElevationGain) + ' m';
+                document.getElementById('val-bearing').textContent = Math.round(bearing) + '\u00B0';
+
+                // Update map
+                userMarker.setLatLng([userState.lat, userState.lng]);
+                mainMap.panTo([userState.lat, userState.lng], { animate: true, duration: 0.3 });
+                insetMap.setView([userState.lat, userState.lng], insetMap.getZoom());
+
+                // Climb detection
+                const climbAlert = document.getElementById('climb-alert');
+                if (grade > 5) {
+                    climbAlert.classList.add('active');
+                    // Calculate remaining climb distance along route
+                    let remainingClimb = 0;
+                    if (routeCoordinates.length > 0 && currentRouteIndex < routeCoordinates.length - 1) {
+                        let scanIdx = currentRouteIndex;
+                        while (scanIdx < routeCoordinates.length - 1) {
+                            const p1 = routeCoordinates[scanIdx];
+                            const p2 = routeCoordinates[scanIdx + 1];
+                            const segDist = haversineDistance(p1.lat, p1.lng, p2.lat, p2.lng);
+                            const segGrade = segDist > 0 ? ((p2.alt - p1.alt) / segDist) * 100 : 0;
+                            if (segGrade <= 5) break;
+                            remainingClimb += segDist;
+                            scanIdx++;
+                        }
+                    }
+                    document.getElementById('climb-remaining').textContent =
+                        'Climb Distance Remaining: ' + Math.round(remainingClimb) + ' m';
+                    document.getElementById('climb-min-power').textContent =
+                        'Min Stability Power: ' + Math.round(balancePower) + ' W';
+                } else {
+                    climbAlert.classList.remove('active');
+                }
+
+                // Dynamic rerouting check
+                if (!reroutingInProgress && routeCoordinates.length > 0) {
+                    const distToRoute = distanceToRoute(userState.lat, userState.lng);
+                    if (distToRoute > REROUTE_THRESHOLD_M) {
+                        reroutingInProgress = true;
+                        console.log('Deviation detected (' + Math.round(distToRoute) + 'm), recalculating route...');
+                        calculateRoute().then(function() {
+                            reroutingInProgress = false;
+                        }).catch(function() {
+                            reroutingInProgress = false;
+                        });
+                    }
+                }
+            }
+
+            // --- Initialization ---
+            window.addEventListener('DOMContentLoaded', function() {
+                initMaps();
+                initGeolocator();
+                setInterval(processTelemetryLoop, 1000);
+            });
+
+            // Expose for console testing
+            window.testPhysics = {
+                calculatePower: calculatePower,
+                calculateBalancePower: calculateBalancePower,
+                haversineDistance: haversineDistance,
+                msToKmh: msToKmh,
+                kmhToMs: kmhToMs,
+                calculateGrade: calculateGrade,
+                G: G,
+                AIR_DENSITY: AIR_DENSITY,
+                DEFAULT_CDA: DEFAULT_CDA,
+                DEFAULT_CRR: DEFAULT_CRR,
+                DEFAULT_ETA: DEFAULT_ETA,
+                EARTH_RADIUS: EARTH_RADIUS,
+                BALANCE_SPEED_MS: BALANCE_SPEED_MS
+            };
+        })();
+    </script>
+</body>
+</html>

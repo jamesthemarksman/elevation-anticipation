@@ -1,0 +1,33 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "anthropic/claude-sonnet-4-20250514",
+  "small_model": "anthropic/claude-sonnet-4-20250514",
+  "default_agent": "cyclist-builder",
+  "mcp": {
+    "filesystem": {
+      "type": "local",
+      "command": ["python3", "mcp_filesystem.py"],
+      "enabled": true
+    },
+    "fetch": {
+      "type": "local",
+      "command": ["python3", "mcp_fetch.py"],
+      "enabled": true
+    }
+  },
+  "skills": {
+    "paths": [".kilo/skill"]
+  },
+  "instructions": ["AGENTS.md", "BIKE_SKILLS.md"],
+  "permission": {
+    "bash": "allow",
+    "edit": {
+      "HarnessTutorial/**": "allow",
+      "*": "ask"
+    },
+    "read": "allow",
+    "webfetch": "allow",
+    "filesystem_*": "allow",
+    "fetch_*": "allow"
+  }
+}
