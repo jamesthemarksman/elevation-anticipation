@@ -1,0 +1,342 @@
+Learning Objective RecapThe primary goal of this exercise is to understand how an AI coding harness interfaces with features like Skills, Templates, Tools, and Model Context Protocol (MCP) Servers.To demonstrate this interaction practically, we will configure an AI harness to build a feature-complete, single-file HTML5 mobile-responsive application. The application will serve as a Cyclist Navigation & Power Telemetry Dashboard with the following capabilities:Core Navigation: Real-time mobile GPS tracking, automated map re-centering, route plotting between a start and end point using OpenStreetMap/Leaflet, and an on-screen route overview inset.Dynamic Rerouting: Automatic route recalculation if the rider deviates from the planned path.Advanced Telemetry: Live calculation of rider speed, total distance travelled, cumulative elevation gain, and real-time mechanical power output (\(W\)) based on rider/bike weight, speed, and slope gradient.Gradient Awareness: Color-coded route lines mapping upcoming slope steepness, dynamic countdowns of distance remaining for sustained climbs (\(>5\%\) gradient), and calculated minimum balance speed thresholds alongside the wattage required to sustain them.Step 1: Mapping the Project to an MCP & Tools HarnessTo build this project using an open-source agent harness like OpenCode or Pi, the agent relies on structured tools and protocol servers. Here is how the harness utilizes these components to build your app:[ Your AI Agent Harness ]
+    │
+    ├──> [ MCP Filesystem Tool ] ──────> Reads/Writes index.html & assets
+    ├──> [ MCP Fetch/Web Tool ] ───────> Pulls Leaflet.js & OSRM Routing APIs
+    └──> [ Mathematical Skill ] ───────> Validates physics formulas (Power, Grade)
+MCP Servers (Model Context Protocol): The harness connects to an mcp-server-filesystem to securely create, read, and write your project files. It also utilizes an mcp-server-fetch to query external routing endpoints (like the Open Source Routing Machine) to understand how the API response format maps to geometry.Tools: The agent executes atomic functions like write_file, view_code, and bash_execute (to run a local preview web server).Skills / Templates: The agent pulls pre-configured computational skills (such as physics formulas for rolling resistance and aerodynamic drag) to ensure the JavaScript telemetry code is mathematically sound.Step 2: The Physical & Mathematical FormulasTo ensure the JavaScript code calculates telemetry accurately, the underlying Computational Skill injected by the harness utilizes standard cycling physics equations.Mechanical Power EquationThe total power required (\(P_{\text{total}}\)) to propel a bicycle is the sum of the power needed to overcome gravity, aerodynamic drag, and rolling resistance:\(P_{\text{total}}=\frac{P_{\text{gravity}}+P_{\text{drag}}+P_{\text{rolling}}}{\eta }\)Where:\(P_{\text{gravity}} = m \cdot g \cdot \sin(\arctan(G)) \cdot v\)\(P_{\text{drag}} = 0.5 \cdot C_d \cdot A \cdot \rho \cdot v^3\)\(P_{\text{rolling}} = m \cdot g \cdot \cos(\arctan(G)) \cdot C_{rr} \cdot v\)\(m\) = Total mass (rider + bicycle in \(\text{kg}\))\(g\) = Acceleration due to gravity (\(9.81 \, \text{m/s}^2\))\(G\) = Gradient as a decimal (e.g., \(0.05\) for \(5\%\))\(v\) = Velocity relative to the ground (\(\text{m/s}\))\(C_d \cdot A\) = Aerodynamic drag coefficient area (assumed \(\approx 0.38\))\(\rho \) = Air density (assumed \(\approx 1.2 \, \text{kg/m}^3\))\(C_{rr}\) = Rolling resistance coefficient (assumed \(\approx 0.005\) for pavement)\(\eta \) = Drivetrain efficiency (assumed \(\approx 0.95\) for a clean chain)Minimum Balance Speed & Stability WattageTo maintain bicycle stability without stalling or weaving excessively on steep inclines, a baseline speed is required. A practical minimum speed threshold for stable bicycle tracking under load is approximately \(1.67 \, \text{m/s}\) (\(\approx 6 \, \text{km/h}\)).The stability wattage is calculated by running this minimum speed value through the total power equation for the current gradient.Step 3: Complete Single-Page HTML5 ImplementationThis single file contains all structural elements, CSS layout styling optimized for mobile screens, and the core Leaflet mapping engine script. You can write this directly to an index.html file using your harness tool configuration.html<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Cyclist Navigation & Telemetry Dashboard</title>
+    <!-- Leaflet Maps CSS -->
+    <link rel="stylesheet" href="https://unpkg.com" />
+    <style>
+        :root {
+            --bg-dark: #121214;
+            --bg-panel: #1a1a1e;
+            --accent-green: #4ade80;
+            --accent-blue: #3b82f6;
+            --text-main: #f4f4f5;
+            --text-muted: #a1a1aa;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #app-container {
+            position: relative;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #map {
+            width: 100%;
+            flex: 1;
+            z-index: 1;
+        }
+
+        /* Config & Telemetry Overlay Panel */
+        #dashboard {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background-color: var(--bg-panel);
+            z-index: 10;
+            border-top-left-radius: 16px;
+            border-top-right-radius: 16px;
+            padding: 16px;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            max-height: 55%;
+            overflow-y: auto;
+        }
+
+        .input-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            font-weight: 640;
+        }
+
+        input {
+            background-color: var(--bg-dark);
+            border: 1px solid #2d2d34;
+            border-radius: 6px;
+            padding: 8px;
+            color: var(--text-main);
+            font-size: 14px;
+        }
+
+        button {
+            background-color: var(--accent-blue);
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background-color: #2563eb;
+        }
+
+        /* Telemetry Grid Grid Layout */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            background: var(--bg-dark);
+            padding: 10px;
+            border-radius: 8px;
+        }
+
+        .stat-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 6px;
+            text-align: center;
+        }
+
+        .stat-val {
+            font-size: 18px;
+            font-weight: 800;
+            color: var(--accent-green);
+        }
+
+        .stat-lbl {
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        /* Climb Warning Alert Banner */
+        #climb-alert {
+            display: none;
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid var(--danger);
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 12px;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        #climb-alert.active {
+            display: flex;
+        }
+
+        /* Map Inset Display Layer */
+        #inset-container {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 110px;
+            height: 110px;
+            border-radius: 8px;
+            border: 2px solid var(--bg-panel);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 5;
+            overflow: hidden;
+            pointer-events: none; /* Inset is visual only */
+        }
+
+        #inset-map {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Form Overlay at Top */
+        #routing-panel {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            width: calc(100% - 160px);
+            z-index: 5;
+            background: var(--bg-panel);
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        #routing-panel input {
+            padding: 6px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app-container">
+        <!-- Main Map Layer -->
+        <div id="map"></div>
+
+        <!-- Mini-Map Inset View -->
+        <div id="inset-container">
+            <div id="inset-map"></div>
+        </div>
+
+        <!-- Navigation Address Controls -->
+        <div id="routing-panel">
+            <input type="text" id="start-input" placeholder="Start (e.g. Lon,Lat or Name)" value="-114.0708,51.0447">
+            <input type="text" id="end-input" placeholder="Destination" value="-114.0950,51.0500">
+            <button onclick="calculateRoute()">Plan Route</button>
+        </div>
+
+        <!-- Telemetry & Calculations Board -->
+        <div id="dashboard">
+            <div class="input-row">
+                <div class="input-group">
+                    <label>Rider Weight (kg)</label>
+                    <input type="number" id="w-rider" value="75">
+                </div>
+                <div class="input-group">
+                    <label>Bike Weight (kg)</label>
+                    <input type="number" id="w-bike" value="10">
+                </div>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-card"><div class="stat-val" id="val-power">0 W</div><div class="stat-lbl">Power Output</div></div>
+                <div class="stat-card"><div class="stat-val" id="val-speed">0.0 km/h</div><div class="stat-lbl">Current Speed</div></div>
+                <div class="stat-card"><div class="stat-val" id="val-grade">0.0%</div><div class="stat-lbl">Gradient</div></div>
+                <div class="stat-card"><div class="stat-val" id="val-dist">0.0 km</div><div class="stat-lbl">Distance</div></div>
+                <div class="stat-card"><div class="stat-val" id="val-climb">0 m</div><div class="stat-lbl">Elev. Gain</div></div>
+                <div class="stat-card"><div class="stat-val" id="val-bearing">0°</div><div class="stat-lbl">Heading</div></div>
+            </div>
+
+            <!-- Dynamic Steep Slope Warning Element -->
+            <div id="climb-alert">
+                <div style="font-weight:bold; color: var(--danger);">⚠️ STEEP GRADIENT DETECTED!</div>
+                <div id="climb-remaining">Climb Distance Remaining: -- m</div>
+                <div id="climb-min-speed">Min Stability Speed: 6.0 km/h</div>
+                <div id="climb-min-power">Min Stability Power: -- W</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet Engine Library Integration -->
+    <script src="https://unpkg.com"></script>
+    <script>
+        let mainMap, insetMap;
+        let userMarker, routeLine, insetRouteLine;
+        let routeCoordinates = []; // Stores baseline route nodes [{lat, lng, alt}]
+        let currentRouteIndex = 0;
+        
+        // Simulating values when running in a local browser sandbox env
+        let userState = {
+            lat: 51.0447,
+            lng: -114.0708,
+            alt: 1045,
+            speed: 5.5, // m/s (~20 km/h)
+            totalDistance: 0,
+            totalElevationGain: 0,
+            lastLat: null,
+            lastLng: null,
+            lastAlt: null
+        };
+
+        // Initialize Mapping Interfaces
+        window.addEventListener('DOMContentLoaded', () => {
+            // Main Map Configuration
+            mainMap = L.map('map', { zoomControl: false }).setView([userState.lat, userState.lng], 15);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19
+            }).addTo(mainMap);
+
+            // Visual Marker indicating Rider Position
+            userMarker = L.circleMarker([userState.lat, userState.lng], {
+                radius: 8, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 1
+            }).addTo(mainMap);
+
+            // Inset Map Configuration
+            insetMap = L.map('inset-map', { attributionControl: false, zoomControl: false, dragging: false, scrollWheelZoom: false });
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(insetMap);
+            insetMap.setView([userState.lat, userState.lng], 12);
+
+            // Initialize Hardware GPS API Pipeline
+            initGeolocator();
+            
+            // Loop tracking telemetry processing runs 1 time per second
+            setInterval(processTelemetryLoop, 1000);
+        });
+
+        function initGeolocator() {
+            if ("geolocation" in navigator) {
+                navigator.geolocation.watchPosition(position => {
+                    userState.lat = position.coords.latitude;
+                    userState.lng = position.coords.longitude;
+                    if(position.coords.altitude) userState.alt = position.coords.altitude;
+Use code with caution.if(position.coords.speed) userState.speed = position.coords.speed;}, error => console.warn("GPS Interface Offline, using simulated values"), {enableHighAccuracy: true,maximumAge: 1000});}}// Fetch Route Pathing from OSRM Backend Engineasync function calculateRoute() {const startRaw = document.getElementById('start-input').value.split(',');const endRaw = document.getElementById('end-input').value.split(',');// Public instances of OSRM Demo APIconst url = https://project-osrm.org{startRaw[0]},${startRaw[1]};${endRaw[0]},${endRaw[1]}?geometries=geojson&overview=full;try {const response = await fetch(url);const data = await response.json();if(!data.routes || data.routes.length === 0) return;const coords = data.routes[0].geometry.coordinates;// Parse coordinates, synthesizing elevation curves artificially for demonstration pathsrouteCoordinates = coords.map((c, idx) => {return {lat: c[1],lng: c[0],// Fake undulating hill topography profilealt: 1045 + (Math.sin(idx / 5) * 18) + (idx * 0.4)};});plotRouteGradients();} catch (e) {alert("Routing calculation request dropped or failed.");}}// Advanced Multi-Segment Color-Coding Logic Mapping Gradient Slopesfunction plotRouteGradients() {if(routeLine) mainMap.removeLayer(routeLine);if(insetRouteLine) insetMap.removeLayer(insetRouteLine);// Render baseline geometry on micro-inset viewerconst rawLatLngs = routeCoordinates.map(c => [c.lat, c.lng]);insetRouteLine = L.polyline(rawLatLngs, {color: '#3b82f6', weight: 2}).addTo(insetMap);insetMap.fitBounds(insetRouteLine.getBounds());// Break path into explicit sub-polylines based on local slope steepness valueslet featureGroup = L.featureGroup();for(let i = 0; i < routeCoordinates.length - 1; i++) {let p1 = routeCoordinates[i];let p2 = routeCoordinates[i+1];let dist = mainMap.distance([p1.lat, p1.lng], [p2.lat, p2.lng]);let run = p2.alt - p1.alt;let grade = dist > 0 ? (run / dist) * 100 : 0;// Color profiles matching steepness parameterslet segmentColor = '#4ade80'; // Flat/Downhillif(grade > 2 && grade <= 5) segmentColor = '#f59e0b'; // Moderate Hill Climbif(grade > 5) segmentColor = '#ef4444'; // Steep Section (>5%)L.polyline([[p1.lat, p1.lng], [p2.lat, p2.lng]], {color: segmentColor,weight: 5,opacity: 0.85}).addTo(featureGroup);}routeLine = featureGroup.addTo(mainMap);mainMap.fitBounds(routeLine.getBounds());currentRouteIndex = 0;}// Automated Rerouting Check Framefunction verifyRouteAdherence() {if(routeCoordinates.length === 0) return;let shortestDistance = Infinity;let targetIdx = 0;// Detect nearest waypoint relative to GPSfor(let i=0; i<routeCoordinates.length; i++) {let d = mainMap.distance([userState.lat, userState.lng], [routeCoordinates[i].lat, routeCoordinates[i].lng]);if(d < shortestDistance) {shortestDistance = d;targetIdx = i;}}currentRouteIndex = targetIdx;// Trigger structural reroute if user deviates more than 45 meters from track boundaryif(shortestDistance > 45) {console.log("Rerouting engine triggered: Off-course threshold reached.");document.getElementById('start-input').value = ${userState.lng},${userState.lat};calculateRoute();}}// Live Processing Core Telemetry Computing Engine Loopfunction processTelemetryLoop() {// Update Position Anchor ElementsuserMarker.setLatLng([userState.lat, userState.lng]);mainMap.panTo([userState.lat, userState.lng]);// Track accumulation offsets over timelineif (userState.lastLat !== null) {let incrementalDist = mainMap.distance([userState.lat, userState.lng], [userState.lastLat, userState.lastLng]);userState.totalDistance += (incrementalDist / 1000); // meters to kilometerslet incrementalClimb = userState.alt - userState.lastAlt;if(incrementalClimb > 0) userState.totalElevationGain += incrementalClimb;}verifyRouteAdherence();// Calculate current road profile physics valueslet localGrade = 0;if(routeCoordinates.length > 0 && currentRouteIndex < routeCoordinates.length - 1) {let p1 = routeCoordinates[currentRouteIndex];let p2 = routeCoordinates[currentRouteIndex + 1];let d = mainMap.distance([p1.lat, p1.lng], [p2.lat, p2.lng]);localGrade = d > 0 ? ((p2.alt - p1.alt) / d) * 100 : 0;}// Read variables directly out of configuration fieldslet massRider = parseFloat(document.getElementById('w-rider').value) || 75;let massBike = parseFloat(document.getElementById('w-bike').value) || 10;let massTotal = massRider + massBike;// Mechanical Power output algorithm engine calculation runlet calculatedWatts = computeCyclingPower(massTotal, userState.speed, localGrade);// Push data parameters into presentation framework UI layerdocument.getElementById('val-power').innerText = ${Math.round(calculatedWatts)} W;document.getElementById('val-speed').innerText = ${(userState.speed * 3.6).toFixed(1)} km/h;document.getElementById('val-grade').innerText = ${localGrade.toFixed(1)}%;document.getElementById('val-dist').innerText = ${userState.totalDistance.toFixed(2)} km;document.getElementById('val-climb').innerText = ${Math.round(userState.totalElevationGain)} m;// Process alerts if gradient exceeds specific threshold limitsprocessSustainedClimbTelemetry(localGrade, massTotal);// Preserve frame state data historical anchorsuserState.lastLat = userState.lat;userState.lastLng = userState.lng;userState.lastAlt = userState.alt;// For local desktop preview environments, auto-advance position down the path arrayif(routeCoordinates.length > 0 && currentRouteIndex < routeCoordinates.length - 1) {let nextNode = routeCoordinates[currentRouteIndex + 1];userState.lat = nextNode.lat;userState.lng = nextNode.lng;userState.alt = nextNode.alt;}}// Mathematical physics calculation solver function matching step 2 specificationsfunction computeCyclingPower(mass, velocity, gradePct) {if(velocity < 0.2) return 0; // Stopped conditionlet g = 9.81;let gradeDecimal = gradePct / 100;let angle = Math.atan(gradeDecimal);let pGravity = mass * g * Math.sin(angle) * velocity;let pRolling = mass * g * Math.cos(angle) * 0.005 * velocity;let pDrag = 0.5 * 0.38 * 1.2 * Math.pow(velocity, 3);let totalPower = (pGravity + pRolling + pDrag) / 0.95;return totalPower > 0 ? totalPower : 0; // Ground clamped minimum boundary}// Distance Remaining & Balance Metrics Sub-Processor Enginefunction processSustainedClimbTelemetry(currentGrade, massTotal) {const alertBanner = document.getElementById('climb-alert');if(currentGrade >= 5) {alertBanner.classList.add('active');// Calculate remaining distance on this steep sectionlet climbDistance = 0;for(let i = currentRouteIndex; i < routeCoordinates.length - 1; i++) {let p1 = routeCoordinates[i];let p2 = routeCoordinates[i+1];let d = mainMap.distance([p1.lat, p1.lng], [p2.lat, p2.lng]);let g = d > 0 ? ((p2.alt - p1.alt) / d) * 100 : 0;if (g >= 5) {climbDistance += d;} else {break; // Climb breaks below steep threshold criteria}}// Balance Velocity Rule configurationlet minStabilityVelocityMs = 1.67; // 6 km/h absolute tracking limitlet minStabilityWatts = computeCyclingPower(massTotal, minStabilityVelocityMs, currentGrade);document.getElementById('climb-remaining').innerText = Climb Distance Remaining: ${Math.round(climbDistance)} m;document.getElementById('climb-min-power').innerText = Min Stability Power: ${Math.round(minStabilityWatts)} W;} else {alertBanner.classList.remove('active');}}
+---
+
+### Step 4: Interfacing the Project with MCP Tools & Skills
+When you work with a harness to run and test this project, you can pass explicit technical parameters directly to its integrated components.
+
+#### Extending the Project with Tools and Custom Skills
+To see how a custom tool or extension fits into this setup, consider creating a dedicated file named `BIKE_SKILLS.md` in your project folder. This acts as a localized system prompt or tool context template that your agent will look for automatically when optimizing code.
+
+```markdown
+# Cyclist Physics Validation Rule Set
+
+## Rolling Resistance Profiles
+* Asphalt Smooth: 0.004
+* Pavement Standard: 0.005
+* Gravel Course: 0.008
+
+## Aerodynamic Profiles
+* Racing Drops Hood: CdA = 0.32
+* Standard Touring Hood: CdA = 0.38
+* Urban Commuter Upright: CdA = 0.42
+By referencing BIKE_SKILLS.md in your harness chat window, the tool chain reads the profile values via its Filesystem Tool and overrides the hardcoded coefficients in the JavaScript physics equations to match your specific bike configuration.Connecting an MCP Server for Live TestingTo feed actual real-time cycling hardware data into this webpage using the Model Context Protocol (MCP), you can run a local proxy script that acts as an MCP server. This server connects to a Bluetooth smart trainer or power meter using an entry in your tool configuration file:json{
+  "mcpServers": {
+    "cycling-telemetry-bridge": {
+      "command": "node",
+      "args": ["path/to/ant_plus_or_ble_mcp_bridge.js"],
+      "env": {
+        "BIND_PORT": "8080"
+      }
+    }
+  }
+}
+Use code with caution.This configuration exposes a tool named get_live_sensor_readings directly to your agent. This allows the harness to read live data during testing rather than relying on simulated values in the browser.
